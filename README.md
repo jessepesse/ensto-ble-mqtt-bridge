@@ -81,9 +81,27 @@ Edit `config.json` with your settings:
 
 **Subsequent runs do NOT require pairing mode.** The script will use the stored key from `ensto_devices.json`.
 
-## Running as a Service
+## Home Assistant Add-on Installation
 
-To keep the bridge running in the background, you can create a systemd service.
+You can install this directly in Home Assistant as a local add-on.
+
+1.  **Copy files**: Copy the `ha-addon` folder to your Home Assistant's `/addons/` directory. Rename it to `ensto-bridge` (so the path is `/addons/ensto-bridge`).
+    - You can use the "Samba Share" add-on or SSH to do this.
+    - **Important:** You must also copy `ensto_bridge.py` and `requirements.txt` into that folder! The Dockerfile expects them to be there.
+2.  **Install**:
+    - Go to **Settings > Add-ons > Add-on Store**.
+    - Click **Check for updates** (top right dots).
+    - You should see "Local Add-ons" section with "Ensto BLE MQTT Bridge".
+    - Click **Install**.
+3.  **Configure**:
+    - Go to the **Configuration** tab of the add-on.
+    - Enter your MQTT details and Device MAC addresses.
+4.  **Start**:
+    - Click **Start**. Check the logs to see it connecting.
+
+## Running as a Service (Linux/Pi)
+
+To keep the bridge running in the background on a standard Linux install:
 
 1.  Create service file: `sudo nano /etc/systemd/system/ensto-bridge.service`
     ```ini
@@ -157,6 +175,10 @@ python3 ble_inspect.py
 ### "Service Discovery has not been performed yet"
 - This is usually a transient Bluetooth error. The script will automatically retry.
 - Ensure no other device (phone app) is connected to the thermostat.
+
+## Credits
+
+Based on research from the [hass_ensto_ble](https://github.com/ExMacro/hass_ensto_ble) Home Assistant integration.
 
 ## License
 
