@@ -40,3 +40,5 @@ Thumbs.db
 
 # Project specific
 *.log
+config.json
+ensto_devices.json

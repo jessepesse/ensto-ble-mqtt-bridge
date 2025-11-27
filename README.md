@@ -1,24 +1,32 @@
 # Ensto BLE to MQTT Bridge
 
-> [!WARNING]
-> **This script has not been tested on Linux yet!** It was developed on macOS where vendor-specific BLE UUIDs cannot be read. Testing on Linux/Raspberry Pi is pending.
+> [!NOTE]
+> **Project Status: Alpha / Experimental**
+> This project is currently in early development. Features and configuration methods may change. Use with caution.
 
-Python script to read sensor data from Ensto BLE thermostats and publish it to Home Assistant via MQTT.
+Python script to read sensor data from Ensto BLE thermostats (ECO16BT, ELTE6-BT) and publish it to Home Assistant via MQTT.
 
 ## Features
 
-- 🔌 Connects to Ensto BLE thermostats (ECO16BT, ELTE6-BT)
-- 📡 Publishes sensor data to MQTT
-- 🏠 Home Assistant MQTT Discovery support (auto-configures sensors)
-- 🔄 Automatic reconnection and retry logic
-- 📊 Reads: Room temperature, Floor temperature, Target temperature, Relay state
+- 🔌 **Connects to Ensto BLE thermostats** (ECO16BT, ELTE6-BT)
+- 📡 **Publishes sensor data to MQTT**
+- 🏠 **Home Assistant MQTT Discovery support** (auto-configures sensors)
+- 🔐 **Persistent Authentication**: Stores Factory Reset IDs to allow connection without pairing mode.
+- 🔄 **Automatic reconnection and retry logic**
+- 📊 **Reads**: Room temperature, Floor temperature, Target temperature (calibrated*), Relay state
+  > *Note: Target temperature calibration is experimental and may require further tuning.*
 
 ## Requirements
 
+### Hardware / OS
 - **Linux/Raspberry Pi** with BlueZ (macOS is NOT supported due to Core Bluetooth limitations)
-- Python 3.8+
 - Bluetooth adapter
-- MQTT broker (e.g., Mosquitto)
+
+### Software
+- Python 3.8+
+- **Home Assistant** with:
+    - **MQTT Broker** (e.g., Mosquitto) installed and running.
+    - **MQTT User** created in Home Assistant with **Local** and **Admin** rights (required for discovery and state updates).
 
 ## Installation
 
@@ -34,18 +42,71 @@ pip install -r requirements.txt
 ```
 
 ### 3. Configure
-Edit `ensto_bridge.py` and set:
-- `MQTT_BROKER` - Your MQTT broker IP address
-- `MQTT_PORT` - MQTT broker port (default: 1883)
-- `MQTT_USER` - MQTT username
-- `MQTT_PASSWORD` - MQTT password
-- `DEVICES` - List of thermostat names (e.g., `["ECO16BT 535550"]`)
-- `POLL_INTERVAL` - Polling interval in seconds (default: 120)
-
-### 4. Run
+Copy the example configuration file:
 ```bash
-python3 ensto_bridge.py
+cp config.json.example config.json
 ```
+
+Edit `config.json` with your settings:
+```json
+{
+    "mqtt": {
+        "broker": "192.168.1.100",
+        "port": 1883,
+        "username": "mqtt_user",
+        "password": "your_password"
+    },
+    "poll_interval": 120,
+    "devices": [
+        "AA:BB:CC:DD:EE:FF"
+    ]
+}
+```
+*   **devices**: List of MAC addresses for your thermostats.
+
+## First Run (Pairing)
+
+**Important:** For the very first connection, the thermostat must be in **Pairing Mode** to capture the authentication key.
+
+1.  Put your thermostat in **Pairing Mode** (Blue LED blinking).
+2.  Run the script:
+    ```bash
+    python3 ensto_bridge.py
+    ```
+3.  The script will:
+    - Connect to the device.
+    - Capture the `Factory Reset ID`.
+    - Save it to `ensto_devices.json`.
+    - Perform the handshake and read data.
+
+**Subsequent runs do NOT require pairing mode.** The script will use the stored key from `ensto_devices.json`.
+
+## Running as a Service
+
+To keep the bridge running in the background, you can create a systemd service.
+
+1.  Create service file: `sudo nano /etc/systemd/system/ensto-bridge.service`
+    ```ini
+    [Unit]
+    Description=Ensto BLE MQTT Bridge
+    After=network.target bluetooth.target
+
+    [Service]
+    ExecStart=/usr/bin/python3 /path/to/ensto-ble-mqtt-bridge/ensto_bridge.py
+    WorkingDirectory=/path/to/ensto-ble-mqtt-bridge
+    StandardOutput=inherit
+    StandardError=inherit
+    Restart=always
+    User=pi
+
+    [Install]
+    WantedBy=multi-user.target
+    ```
+2.  Enable and start:
+    ```bash
+    sudo systemctl enable ensto-bridge
+    sudo systemctl start ensto-bridge
+    ```
 
 ## MQTT Topics
 
@@ -71,48 +132,15 @@ Home Assistant will automatically discover:
 - `sensor.ensto_<address>_target_temp` - Target temperature
 - `binary_sensor.ensto_<address>_relay` - Relay state (heating on/off)
 
-## Debugging Tools
-
-### scan.py
-Scan for nearby BLE devices:
-```bash
-python3 scan.py
-```
-
-### ble_inspect.py
-Inspect GATT services and characteristics:
-```bash
-python3 ble_inspect.py
-```
-
 ## Troubleshooting
 
-### "Device not found"
-- Ensure the thermostat is powered on and within Bluetooth range
-- Make sure no other device (phone, Home Assistant) is connected to it
-- Try running `scan.py` to verify the device is visible
+### "Handshake failed"
+- Ensure `ensto_devices.json` exists and contains a key for your device.
+- If not, delete the entry from `ensto_devices.json` and run the "First Run (Pairing)" steps again.
 
-### "Handshake failed" or "Service Discovery has not been performed yet"
-- **On macOS**: This script requires Linux/Raspberry Pi with BlueZ. macOS Core Bluetooth does not support the vendor-specific UUIDs used by Ensto thermostats.
-- **On Linux**: Ensure BlueZ version is >= 5.55
-
-### MQTT Connection Issues
-- Verify MQTT broker is running and accessible
-- Check username/password credentials
-- Test connection with `mosquitto_pub`:
-  ```bash
-  mosquitto_pub -h <broker_ip> -u <user> -P <password> -t test -m "hello"
-  ```
-
-## Limitations
-
-- ❌ **macOS is not supported** - Core Bluetooth limitations prevent reading vendor-specific UUIDs
-- ✅ **Linux/Raspberry Pi** - Fully supported with BlueZ
-- ⏱️ Poll-based (reads data every 2 minutes by default) - not real-time
-
-## Credits
-
-Based on research from the [hass_ensto_ble](https://github.com/ExMacro/hass_ensto_ble) Home Assistant integration.
+### "Service Discovery has not been performed yet"
+- This is usually a transient Bluetooth error. The script will automatically retry.
+- Ensure no other device (phone app) is connected to the thermostat.
 
 ## License
 

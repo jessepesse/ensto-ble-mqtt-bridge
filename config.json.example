@@ -1,0 +1,12 @@
+{
+    "mqtt": {
+        "broker": "192.168.1.100",
+        "port": 1883,
+        "username": "mqtt_user",
+        "password": "your_password"
+    },
+    "poll_interval": 120,
+    "devices": [
+        "AA:BB:CC:DD:EE:FF"
+    ]
+}

@@ -6,25 +6,39 @@ from bleak import BleakClient, BleakScanner
 import paho.mqtt.client as mqtt
 
 # Configuration
-MQTT_BROKER = "192.168.1.35"
-MQTT_PORT = 1883
-MQTT_USER = "mqtt_bridge"
-MQTT_PASSWORD = "Ensto1234"
-POLL_INTERVAL = 120  # seconds
+CONFIG_FILE = "config.json"
 
-# List of your Ensto thermostat MAC addresses OR Device Names (for macOS)
-DEVICES = [
-    "ECO16BT 535550", 
-]
+def load_config():
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logging.error(f"Configuration file '{CONFIG_FILE}' not found. Please copy config.json.example to config.json and edit it.")
+        exit(1)
+    except Exception as e:
+        logging.error(f"Failed to load configuration: {e}")
+        exit(1)
+
+config = load_config()
+
+MQTT_BROKER = config["mqtt"]["broker"]
+MQTT_PORT = config["mqtt"]["port"]
+MQTT_USER = config["mqtt"]["username"]
+MQTT_PASSWORD = config["mqtt"]["password"]
+POLL_INTERVAL = config.get("poll_interval", 120)
+DEVICES = config.get("devices", [])
 
 # Constants
 MANUFACTURER_ID = 0x2806
 FACTORY_RESET_ID_UUID = "f366dddb-ebe2-43ee-83c0-472ded74c8fa"
 REAL_TIME_INDICATION_UUID = "66ad3e6b-3135-4ada-bb2b-8b22916b21d4"
+STORAGE_FILE = "ensto_devices.json"
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+logging.getLogger("bleak").setLevel(logging.DEBUG)
+
 
 class EnstoBridge:
     def __init__(self):
@@ -48,6 +62,23 @@ class EnstoBridge:
     def on_mqtt_disconnect(self, client, userdata, disconnect_flags, rc, properties=None):
         logger.warning(f"Disconnected from MQTT Broker (rc={rc})")
 
+    def load_device_data(self):
+        try:
+            with open(STORAGE_FILE, 'r') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {}
+        except Exception as e:
+            logger.error(f"Failed to load device data: {e}")
+            return {}
+
+    def save_device_data(self, data):
+        try:
+            with open(STORAGE_FILE, 'w') as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            logger.error(f"Failed to save device data: {e}")
+
     async def run(self):
         try:
             self.mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
@@ -67,11 +98,15 @@ class EnstoBridge:
             await asyncio.sleep(POLL_INTERVAL)
 
     async def find_device(self, identifier):
-        """Finds a device by Name using find_device_by_name."""
+        """Finds a device by Name or Address."""
         logger.info(f"Scanning for device '{identifier}'...")
         
-        # Use find_device_by_name which works better on macOS
-        device = await BleakScanner.find_device_by_name(identifier, timeout=10.0)
+        # Check if identifier looks like a MAC address (contains :)
+        if ":" in identifier:
+             device = await BleakScanner.find_device_by_address(identifier, timeout=10.0)
+        else:
+            # Use find_device_by_name which works better on macOS
+            device = await BleakScanner.find_device_by_name(identifier, timeout=10.0)
         
         if device:
             logger.info(f"Found {device.name} at {device.address}")
@@ -84,8 +119,9 @@ class EnstoBridge:
             return
 
         logger.info(f"Connecting to {device.name}...")
-
-        async with BleakClient(device, timeout=20.0) as client:
+        
+        # Use address string instead of device object to avoid potential stale object issues
+        async with BleakClient(device.address, timeout=20.0) as client:
             if not client.is_connected:
                 logger.error(f"Failed to connect to {device.address}")
                 return
@@ -96,47 +132,54 @@ class EnstoBridge:
             logger.info("Waiting for services to initialize...")
             await asyncio.sleep(5)
             
-            # Warm up the connection by reading some standard characteristics first
-            # This forces macOS to resolve all the handles properly
-            try:
-                logger.info("Warming up connection with standard reads...")
-                
-                # Read device name (standard UUID)
-                device_name_data = await client.read_gatt_char("00002a00-0000-1000-8000-00805f9b34fb")
-                logger.info(f"Device name read: {device_name_data[:20]}")
-                
-                # Small delay
-                await asyncio.sleep(1)
-                
-                # Read manufacturer name (standard UUID)
-                mfg_data = await client.read_gatt_char("00002a29-0000-1000-8000-00805f9b34fb")
-                logger.info(f"Manufacturer read: {mfg_data}")
-                
-                # Another delay to let things settle
-                await asyncio.sleep(2)
-                
-            except Exception as e:
-                logger.warning(f"Warmup reads failed (non-critical): {e}")
-                await asyncio.sleep(3)
+            # Warmup reads removed as they cause instability on Linux
+            # The connection seems to be ready after the initial wait
+
             
             # Handshake - required on Linux/Raspberry Pi
-            # (macOS Core Bluetooth doesn't support vendor UUID reads without proper bonding)
             logger.info("Attempting handshake...")
-            for attempt in range(3):
+            
+            # Check if we have a stored Factory ID
+            stored_data = self.load_device_data()
+            device_id_hex = stored_data.get(device.address)
+            
+            factory_id_bytes = None
+            
+            if device_id_hex:
+                logger.info(f"Found stored Factory ID for {device.address}")
+                try:
+                    factory_id_bytes = bytes.fromhex(device_id_hex)
+                except ValueError:
+                    logger.error("Invalid stored ID format")
+            
+            if not factory_id_bytes:
+                logger.info("No stored ID found. Attempting to read from device (Requires Pairing Mode)...")
                 try:
                     factory_id_bytes = await client.read_gatt_char(FACTORY_RESET_ID_UUID)
-                    logger.info(f"Read factory ID: {len(factory_id_bytes)} bytes")
-                    
-                    # Write it back
+                    # Check if valid (not all zeros)
+                    if all(b == 0 for b in factory_id_bytes):
+                        logger.warning("Read ID is all zeros! Device NOT in pairing mode?")
+                        factory_id_bytes = None
+                    else:
+                        logger.info(f"Read new Factory ID: {factory_id_bytes.hex()}")
+                        # Store it
+                        stored_data[device.address] = factory_id_bytes.hex()
+                        self.save_device_data(stored_data)
+                        logger.info("Saved Factory ID to storage")
+                except Exception as e:
+                    logger.warning(f"Failed to read Factory ID: {e}")
+
+            if factory_id_bytes:
+                # Write it back to authenticate
+                try:
                     await client.write_gatt_char(FACTORY_RESET_ID_UUID, factory_id_bytes)
                     logger.info("Handshake completed successfully!")
-                    break
                 except Exception as e:
-                    logger.warning(f"Handshake attempt {attempt + 1}/3 failed: {e}")
-                    if attempt == 2:
-                        logger.error("Handshake failed after 3 attempts. Note: This script requires Linux/Raspberry Pi with BlueZ.")
-                        return
-                    await asyncio.sleep(3)
+                    logger.error(f"Handshake write failed: {e}")
+                    return
+            else:
+                 logger.error("Handshake failed: Could not obtain Factory ID. Please put device in PAIRING MODE.")
+                 return
 
             # Read Real Time Indication
             try:
@@ -151,14 +194,34 @@ class EnstoBridge:
                 logger.error(f"Failed to read data: {e}")
 
     def parse_real_time_data(self, data):
-        if len(data) < 20:
+        if len(data) < 10:
             return {}
         
-        # Parsing logic based on research
-        target_temp = int.from_bytes(data[0:2], byteorder='little') / 10.0
-        room_temp = int.from_bytes(data[3:5], byteorder='little', signed=True) / 10.0
-        floor_temp = int.from_bytes(data[5:7], byteorder='little', signed=True) / 10.0
-        relay_active = bool(data[7])
+        # Log raw data for debugging
+        logger.info(f"Raw data: {data.hex()}")
+        
+        # Parsing logic based on log analysis
+        # Parsing logic based on user calibration
+        # Value is 32-bit uint (bytes 0-3)
+        # Min (5°C): 13038
+        # Max (35°C): 128198
+        # Range: 115160
+        raw_target = int.from_bytes(data[0:4], byteorder='little')
+        
+        # Linear interpolation: 5 + (raw - 13038) * (30 / 115160)
+        target_temp = 5.0 + (raw_target - 13038) * (30.0 / 115160.0)
+        target_temp = round(target_temp, 1)
+        
+        # Room temp: bytes 4-5 (little endian), scaled by 10
+        room_temp = int.from_bytes(data[4:6], byteorder='little', signed=True) / 10.0
+        
+        # Floor temp: bytes 6-7 (little endian), scaled by 10
+        floor_temp = int.from_bytes(data[6:8], byteorder='little', signed=True) / 10.0
+        
+        # Relay state: byte 13 (index 13)
+        relay_active = False
+        if len(data) > 13:
+            relay_active = bool(data[13])
         
         return {
             "target_temperature": target_temp,
