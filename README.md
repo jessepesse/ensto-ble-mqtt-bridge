@@ -22,7 +22,7 @@ Python script to read sensor data from Ensto BLE thermostats (ECO16BT, ELTE6-BT)
 - **Linux/Raspberry Pi** with BlueZ (macOS is NOT supported due to Core Bluetooth limitations)
 - Bluetooth adapter
 
-### Software
+### Software§
 - Python 3.8+
 - **Home Assistant** with:
     - **MQTT Broker** (e.g., Mosquitto) installed and running.
@@ -131,6 +131,22 @@ Home Assistant will automatically discover:
 - `sensor.ensto_<address>_floor_temp` - Floor temperature
 - `sensor.ensto_<address>_target_temp` - Target temperature
 - `binary_sensor.ensto_<address>_relay` - Relay state (heating on/off)
+
+## Utility Scripts
+
+The repository includes helper scripts for debugging and setup:
+
+### `scan.py`
+Scans for nearby BLE devices and prints their MAC addresses and RSSI signal strength. Use this to find your thermostat's address.
+```bash
+python3 scan.py
+```
+
+### `ble_inspect.py`
+Connects to a specific device and lists all available GATT services and characteristics. Useful for debugging or reverse-engineering.
+```bash
+python3 ble_inspect.py
+```
 
 ## Troubleshooting
 
