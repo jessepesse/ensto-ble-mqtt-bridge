@@ -24,8 +24,8 @@ Python script to read sensor data from Ensto BLE thermostats and publish it to H
 
 ### 1. Clone repository
 ```bash
-git clone https://github.com/yourusername/ensto_bridge.git
-cd ensto_bridge
+git clone https://github.com/jessepesse/ensto-ble-mqtt-bridge.git
+cd ensto-ble-mqtt-bridge
 ```
 
 ### 2. Install dependencies
