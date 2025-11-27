@@ -1,5 +1,8 @@
 # Ensto BLE to MQTT Bridge
 
+> [!WARNING]
+> **This script has not been tested on Linux yet!** It was developed on macOS where vendor-specific BLE UUIDs cannot be read. Testing on Linux/Raspberry Pi is pending.
+
 Python script to read sensor data from Ensto BLE thermostats and publish it to Home Assistant via MQTT.
 
 ## Features
